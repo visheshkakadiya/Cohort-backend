@@ -1,10 +1,29 @@
 import User from '../models/user.model.js'
 import crypto from 'crypto'
 import nodemailer from 'nodemailer'
-import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 
-const registerUser = async (req, res) => {
+const generateAccessAndRefreshToken = async function(userId, req, res) {
+
+    try {
+        const user = await User.findById(userId)
+        
+        const accessToken = await user.generateAccessToken()
+        const refreshToken = await user.generateRefreshToken()
+    
+        user.refreshToken = refreshToken;
+        await user.save({validateBeforeSave: false});
+    
+        return { accessToken, refreshToken }
+    } catch (error) {
+        res.status(400).json({
+            message: "Failed to generate token",
+            error
+        })
+    }
+}
+
+const registerUser = async function(req, res) {
 
     const { name, email, password } = req.body
 
@@ -122,7 +141,7 @@ const loginUser = async function (req, res) {
             })
         }
 
-        const passMatch = await bcrypt.compare(password, user.password)
+        const passMatch = await user.isPasswordCorrect(password)
 
         if (!passMatch) {
             return res.status(400).json({
@@ -130,27 +149,7 @@ const loginUser = async function (req, res) {
             })
         }
 
-        const accessToken = jwt.sign({
-            _id: user._id,
-            role: user.role,
-        },
-            process.env.ACCESS_TOKEN_SECRET,
-            {
-                expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-            },
-        )
-
-        const refreshToken = jwt.sign({
-            _id: user._id,
-        },
-            process.env.REFRESH_TOKEN_SECRET,
-            {
-                expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
-            },
-        )
-
-        user.refreshToken = refreshToken;
-        await user.save({validateBeforeSave: false})
+        const {accessToken, refreshToken} = await generateAccessAndRefreshToken(user._id)
 
         const loggedUser = await User.findById(user._id).select("-password -refreshToken -verificationToken")
 
@@ -209,6 +208,64 @@ const logout = async function (req, res) {
     } catch (error) {
         res.status(400).json({
             message: "failed to logout",
+            error,
+            success: false
+        })
+    }
+}
+
+const refreshAccessToken = async function (req, res) {
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
+    
+    if(!incomingRefreshToken) {
+        return res.status(400).json({
+            message: "Unauthorized request"
+        })
+    }
+
+    try {
+        
+        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET)
+
+        const user = await User.findById(decodedToken?._id)
+
+        if(!user) {
+            return res.status(400).json({
+                message: "User not found"
+            })
+        }
+
+        if(incomingRefreshToken !== user?.refreshToken){
+            res.clearCookie("accessToken");
+            res.clearCookie("refreshToken");
+            return res.status(400).json({
+                message: "Token is used or expired"
+            })
+        }
+
+
+        const {accessToken, newRefreshToken} = await generateAccessAndRefreshToken(user._id)
+
+        const cookieOptions = {
+            httpOnly: true,
+            secure: true,
+            maxAge: 24*60*60*1000
+        }
+
+        user.refreshToken = newRefreshToken
+        await user.save()
+
+        res.cookie("accessToken", accessToken, cookieOptions)
+        res.cookie("refreshToken", newRefreshToken, cookieOptions)
+
+        res.status(200).json({
+            message: "Access token refreshed",
+            success: true,     
+        })
+
+    } catch (error) {
+        res.status(400).json({
+            message: "Failed to refresh access token",
             error,
             success: false
         })
@@ -344,4 +401,5 @@ export {
     forgotPassword,
     resetPassword,
     currentUser,
+    refreshAccessToken
 }

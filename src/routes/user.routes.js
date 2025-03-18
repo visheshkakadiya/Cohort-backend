@@ -4,6 +4,7 @@ import {
     forgotPassword,
     loginUser, 
     logout, 
+    refreshAccessToken, 
     registerUser, 
     resetPassword, 
     verifyUser,
@@ -15,6 +16,7 @@ const router = express.Router()
 
 router.post('/register', registerUser)
 router.get('/verify/:token', verifyUser)
+router.post('/refresh-token', refreshAccessToken)
 router.post('/login', loginUser)
 router.post('/logout', verifyJWT, logout)
 router.post('/forgotPassword', forgotPassword)
